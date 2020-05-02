@@ -7,6 +7,26 @@
 #include "mmu.h"
 #include "proc.h"
 
+int 
+sys_sigret(void) {
+  sigret();
+  return 1;
+}
+
+
+int 
+sys_sigprocmask(void)
+{
+  int sigmask;
+  uint oldsigmask;
+
+  if(argint(0, &sigmask) < 0)
+    return -1;
+  oldsigmask = myproc()->sigmask;
+  myproc()->sigmask = (uint)sigmask;
+  return (int)oldsigmask;
+}
+
 int
 sys_fork(void)
 {
@@ -30,10 +50,12 @@ int
 sys_kill(void)
 {
   int pid;
-
+  int signum;
   if(argint(0, &pid) < 0)
     return -1;
-  return kill(pid);
+  if(argint(1, &signum) < 0)
+    return -1;
+  return kill(pid, signum);
 }
 
 int

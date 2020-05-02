@@ -162,6 +162,14 @@ userinit(void)
   // run this process. the acquire forces the above
   // writes to be visible, and the lock is also needed
   // because the assignment might not be atomic.
+  p->pendingsig = 0;
+  p->sigmask = 0;
+  for (int i = 0; i < 32; i++) {
+    p->signalhandlers[i] = SIG_DFL;
+  }
+  p->trapframebackup = 0;
+  p->ignore_signals = 0;
+
   acquire(&ptable.lock);
 
   p->state = RUNNABLE;
@@ -227,6 +235,16 @@ fork(void)
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
   pid = np->pid;
+
+  np->pendingsig = 0;
+  np->sigmask = curproc->sigmask;
+  // int n = sizeof(curproc->signalhandlers) / sizeof(curproc->signalhandlers[0]);
+  for (int i = 0; i < SIG_NUM; i++) {
+     np->signalhandlers[i] = curproc->signalhandlers[i];
+  }
+  np->trapframebackup = 0;
+  np->ignore_signals = 0;
+  np->stopped = 0;
 
   acquire(&ptable.lock);
 
@@ -493,22 +511,43 @@ wakeup(void *chan)
 // Process won't exit until it returns
 // to user space (see trap in trap.c).
 int
-kill(int pid)
+kill(int pid, int signum)
 {
   struct proc *p;
-
-  acquire(&ptable.lock);
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->pid == pid){
+  if( (pid < 0) || (signum < 0) || (signum > (SIG_NUM-1)) ){
+    return -1;
+  }
+  pushcli();
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->pid != pid) {
+      continue;
+    }
+  switch (signum) {
+    case SIGKILL:
       p->killed = 1;
-      // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
-        p->state = RUNNABLE;
-      release(&ptable.lock);
+      p->state = RUNNABLE;
+      popcli();
+      return 0;
+    case SIGSTOP:
+      p->stopped = 1;
+      popcli();
+      return 0;
+    case SIGCONT:
+      if (p->stopped == 1) {
+        uint newpendingsig = p->pendingsig | (1 << signum);
+        p->pendingsig = newpendingsig;
+        popcli();
+        return 0;
+      }
+      popcli();
+      return -1;
+    default:
+      p->pendingsig |= (1 << signum);
+      popcli();
       return 0;
     }
   }
-  release(&ptable.lock);
+  popcli();
   return -1;
 }
 
@@ -547,4 +586,33 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+// int 
+// sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
+//   struct proc *proc = myproc();
+
+//   if(sigNum <0 || sigNum > (SIG_NUM-1)){  //this signal doesn't exist in the system 
+//     return -1;
+//   }
+//   if(sigNum == SIGKILL || sigNum == SIGSTOP){
+//     return -1;
+//   }
+//   if(oldact){
+//     oldact->sa_handler = proc -> signalhandlers[sigNum]; 
+//     oldact->sigmask = proc -> sigmask[sigNum]; 
+//   }
+
+//   proc -> signalhandlers[sigNum] = act->sa_handler;  //link the new handler to this signal
+
+// return 0; 
+
+// }
+
+void 
+sigret(void){
+  struct proc *proc = myproc();
+  memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
+  proc->tf->esp += sizeof (struct trapframe);
+  proc->ignore_signals = 0;
 }
