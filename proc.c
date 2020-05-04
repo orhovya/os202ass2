@@ -72,9 +72,9 @@ int
 allocpid(void) 
 {
   int pid;
-  acquire(&ptable.lock);
-  pid = nextpid++;
-  release(&ptable.lock);
+  do {
+    pid = nextpid;
+  } while (!cas(&nextpid, pid, pid + 1));
   return pid;
 }
 
@@ -88,19 +88,16 @@ allocproc(void)
 {
   struct proc *p;
   char *sp;
-
-  acquire(&ptable.lock);
-
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == UNUSED)
-      goto found;
-
-  release(&ptable.lock);
-  return 0;
-
-found:
-  p->state = EMBRYO;
-  release(&ptable.lock);
+  pushcli();
+  do {
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+      if(p->state == UNUSED)
+        break;
+    if (p == &ptable.proc[NPROC]) {
+      popcli();
+      return 0; 
+    }
+  } while (!(cas(p, UNUSED, EMBRYO)));
 
   p->pid = allocpid();
 
@@ -615,4 +612,76 @@ sigret(void){
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
   proc->ignore_signals = 0;
+}
+
+
+void 
+handlecontsig(struct proc *p){
+  uint sigcont;
+  int checkcont;
+  while (1) {
+    sigcont = (1 << SIGCONT);
+    checkcont = p->pendingsig & sigcont;
+    if (checkcont) {
+      pushcli();
+
+      if (cas(&p->stopped, 1, 0)) {
+        p->pendingsig = (1 << SIGCONT) ^ p->pendingsig;
+      }
+
+      popcli();
+      break;
+    } else {
+      yield();
+  }
+}
+}
+
+
+void handlesignals(void){
+  struct proc *p = myproc();
+  uint sizeofsigret;
+  if (p == 0) {
+    return;
+  }
+  if (p->ignore_signals) {
+    return;
+  }
+  if (p->stopped) {
+    handlecontsig(p);
+  }
+  for (int i = 0; i < SIG_NUM; i++) {
+    if (!(((1 << i) & p->pendingsig) != 0)){                            // if the bit of signal is not activated (set to 1) then we continue to the next one.
+      continue;
+    }
+
+    p->pendingsig = (1 << i) ^ p->pendingsig;
+
+    if (p->signalhandlers[i] == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
+      continue;
+    }
+
+    if (p->signalhandlers[i] == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
+      kill(p->pid, SIGKILL);
+      continue;
+    }
+
+    p->ignore_signals = 1;                                              // activate ignore signals while moving from kernel space to user space.
+    
+    p->tf->esp = p->tf->esp - sizeof(struct trapframe);                 // make space foe trapframe save.
+    memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
+    p->trapframebackup = (void *) (p->tf->esp);                         // save to backup trapframe the current trapframe
+    
+    // activate the signal handler in user space with "injecting" return to sigret function after finishing.
+
+    sizeofsigret  = (uint) &sigretend - (uint) &sigretstart;          // save the size of sigret function.
+    p->tf->esp = p->tf->esp - sizeofsigret;                             // move esp to save space for sigret function call.
+    memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);         // move to esp the beginning of sigret func.
+    *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
+    *((int *) (p->tf->esp - 8)) = p->tf->esp;                           // push to stack return address of sigret
+    p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
+    p->tf->eip = (uint) p->signalhandlers[i];                           // move eip to the handler's func in user space to run it.
+    
+    break;
+  }
 }
