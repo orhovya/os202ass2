@@ -66,15 +66,15 @@ myproc(void) {
 }
 
 
-
-
 int 
 allocpid(void) 
 {
   int pid;
+  pushcli();
   do {
     pid = nextpid;
   } while (!cas(&nextpid, pid, pid + 1));
+  popcli();
   return pid;
 }
 
@@ -93,12 +93,13 @@ allocproc(void)
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
       if(p->state == UNUSED)
         break;
-    if (p == &ptable.proc[NPROC]) {
+    if (p == &ptable.proc[NPROC]) {                               // if loop reached to the end and did not find an unused process.
       popcli();
+      cprintf("there is no process unused , cprint");
       return 0; 
     }
-  } while (!(cas(p, UNUSED, EMBRYO)));
-
+  } while (!(cas(&p->state, UNUSED, EMBRYO)));
+  popcli();
   p->pid = allocpid();
 
   // Allocate kernel stack.
@@ -350,6 +351,8 @@ wait(void)
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+
+
 void
 scheduler(void)
 {
@@ -401,8 +404,10 @@ sched(void)
 
   if(!holding(&ptable.lock))
     panic("sched ptable.lock");
-  if(mycpu()->ncli != 1)
-    panic("sched locks");
+  if(mycpu()->ncli != 1){
+    cprintf("mycpu()->ncli  = %d . \n",mycpu()->ncli);
+    panic("sched locks" );
+}
   if(p->state == RUNNING)
     panic("sched running");
   if(readeflags()&FL_IF)
@@ -519,30 +524,29 @@ kill(int pid, int signum)
     if (p->pid != pid) {
       continue;
     }
-  switch (signum) {
-    case SIGKILL:
-      p->killed = 1;
-      p->state = RUNNABLE;
-      popcli();
-      return 0;
-    case SIGSTOP:
-      p->stopped = 1;
-      popcli();
-      return 0;
-    case SIGCONT:
-      if (p->stopped == 1) {
-        uint newpendingsig = p->pendingsig | (1 << signum);
-        p->pendingsig = newpendingsig;
+    switch (signum) {
+      case SIGKILL:
+        p->killed = 1;
+        p->state = RUNNABLE;
+        popcli();
+        return 0;
+      case SIGSTOP:
+        p->stopped = 1;
+        popcli();
+        return 0;
+      case SIGCONT:
+        if (p->stopped == 1) {
+          p->pendingsig |= (1 << signum);
+          popcli();
+          return 0;
+        }
+        popcli();
+        return -1;
+      default:
+        p->pendingsig |= (1 << signum);
         popcli();
         return 0;
       }
-      popcli();
-      return -1;
-    default:
-      p->pendingsig |= (1 << signum);
-      popcli();
-      return 0;
-    }
   }
   popcli();
   return -1;
@@ -585,26 +589,27 @@ procdump(void)
   }
 }
 
-// int 
-// sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
-//   struct proc *proc = myproc();
+int 
+sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
+  struct proc *proc = myproc();
 
-//   if(sigNum <0 || sigNum > (SIG_NUM-1)){  //this signal doesn't exist in the system 
-//     return -1;
-//   }
-//   if(sigNum == SIGKILL || sigNum == SIGSTOP){
-//     return -1;
-//   }
-//   if(oldact){
-//     oldact->sa_handler = proc -> signalhandlers[sigNum]; 
-//     oldact->sigmask = proc -> sigmask[sigNum]; 
-//   }
+  if(sigNum <0 || sigNum > (SIG_NUM-1)){        //this signal doesn't exist in the system 
+    return -1;
+  }
+  if(sigNum == SIGKILL || sigNum == SIGSTOP){
+    return -1;
+  }
+  if(act->sigmask < 0){
+    return -1;
+  }
 
-//   proc -> signalhandlers[sigNum] = act->sa_handler;  //link the new handler to this signal
-
-// return 0; 
-
-// }
+  if(oldact){
+    oldact->sa_handler = proc -> signalhandlers[sigNum]; 
+    oldact->sigmask = proc -> sigmask; 
+  }
+  proc -> signalhandlers[sigNum] = act->sa_handler;  //link the new handler to this signal
+  return 0; 
+}
 
 void 
 sigret(void){
@@ -626,7 +631,7 @@ handlecontsig(struct proc *p){
       pushcli();
 
       if (cas(&p->stopped, 1, 0)) {
-        p->pendingsig = (1 << SIGCONT) ^ p->pendingsig;
+        p->pendingsig ^= (1 << SIGCONT);
       }
 
       popcli();
@@ -634,28 +639,24 @@ handlecontsig(struct proc *p){
     } else {
       yield();
   }
-}
+  }
 }
 
 
 void handlesignals(void){
   struct proc *p = myproc();
   uint sizeofsigret;
-  if (p == 0) {
-    return;
-  }
-  if (p->ignore_signals) {
+  if (!p || p->ignore_signals) {
     return;
   }
   if (p->stopped) {
     handlecontsig(p);
   }
   for (int i = 0; i < SIG_NUM; i++) {
-    if (!(((1 << i) & p->pendingsig) != 0)){                            // if the bit of signal is not activated (set to 1) then we continue to the next one.
+    if (((1 << i) & p->pendingsig) == 0){                              // if the bit of signal is not activated (set to 1) then we continue to the next one.
       continue;
     }
-
-    p->pendingsig = (1 << i) ^ p->pendingsig;
+    p->pendingsig ^= (1 << i);                                          // xor which remove the signal from pending signals.
 
     if (p->signalhandlers[i] == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
       continue;
@@ -668,20 +669,19 @@ void handlesignals(void){
 
     p->ignore_signals = 1;                                              // activate ignore signals while moving from kernel space to user space.
     
-    p->tf->esp = p->tf->esp - sizeof(struct trapframe);                 // make space foe trapframe save.
+    p->tf->esp -= sizeof(struct trapframe);                             // make space foe trapframe save.
     memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
     p->trapframebackup = (void *) (p->tf->esp);                         // save to backup trapframe the current trapframe
     
     // activate the signal handler in user space with "injecting" return to sigret function after finishing.
 
-    sizeofsigret  = (uint) &sigretend - (uint) &sigretstart;          // save the size of sigret function.
-    p->tf->esp = p->tf->esp - sizeofsigret;                             // move esp to save space for sigret function call.
-    memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);         // move to esp the beginning of sigret func.
-    *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
-    *((int *) (p->tf->esp - 8)) = p->tf->esp;                           // push to stack return address of sigret
+    sizeofsigret  = (uint) &sigretend - (uint) &sigretstart;            // save the size of sigret function.
+    p->tf->esp -= sizeofsigret;                                         // move esp to save space for sigret function call.
+    memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);          // move to esp the beginning of sigret func.
     p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
+    *((int *) (p->tf->esp + 4)) = i;                                    // push to stack signum parameter
+    *((int *) (p->tf->esp)) = p->tf->esp;                               // push to stack return address of sigret
     p->tf->eip = (uint) p->signalhandlers[i];                           // move eip to the handler's func in user space to run it.
-    
     break;
   }
 }

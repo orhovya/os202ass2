@@ -56,8 +56,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  uint pendingsig;        // Pending signals of the process.
-  uint sigmask;            // Array of signal mask of the process.
+  uint pendingsig;             // Pending signals of the process.
+  uint sigmask;                // Array of signal mask of the process.
   void* signalhandlers[32];
   struct trapframe *trapframebackup; 
   int ignore_signals;
@@ -69,3 +69,8 @@ struct proc {
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
+
+struct sigaction {
+  void (*sa_handler)(int);
+  uint sigmask;
+};
