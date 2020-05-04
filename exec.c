@@ -101,13 +101,13 @@ exec(char *path, char **argv)
   curproc->tf->esp = sp;
 
   for (int i = 0; i < SIG_NUM; i++) {
-    void* handler = curproc->signalhandlers[i];
-    if (handler == (void*)SIG_IGN) {
+    if (curproc->signalhandlers[i]->sa_handler == (void*)SIG_IGN) {
       continue;
     }
-    curproc->signalhandlers[i] = SIG_DFL;
+    curproc->signalhandlers[i]->sa_handler = SIG_DFL;
+    curproc->signalhandlers[i]->sigmask = 0; //???
   }
-
+ 
   switchuvm(curproc);
   freevm(oldpgdir);
   return 0;

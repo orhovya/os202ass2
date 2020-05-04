@@ -162,11 +162,12 @@ userinit(void)
   // because the assignment might not be atomic.
   p->pendingsig = 0;
   p->sigmask = 0;
-  for (int i = 0; i < 32; i++) {
-    p->signalhandlers[i] = SIG_DFL;
-  }
+  /*for (int i = 0; i < 32; i++) {
+    p->signalhandlers[i]->sa_handler = SIG_DFL;
+    p->signalhandlers[i]->sigmask = 0;
+
+  }*/
   p->trapframebackup = 0;
-  p->ignore_signals = 0;
 
   acquire(&ptable.lock);
 
@@ -241,7 +242,6 @@ fork(void)
      np->signalhandlers[i] = curproc->signalhandlers[i];
   }
   np->trapframebackup = 0;
-  np->ignore_signals = 0;
   np->stopped = 0;
 
   acquire(&ptable.lock);
@@ -519,7 +519,7 @@ kill(int pid, int signum)
   if( (pid < 0) || (signum < 0) || (signum > (SIG_NUM-1)) ){
     return -1;
   }
-  pushcli();
+
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
     if (p->pid != pid) {
       continue;
@@ -527,28 +527,26 @@ kill(int pid, int signum)
     switch (signum) {
       case SIGKILL:
         p->killed = 1;
+      // Wake process from sleep if necessary.
+      if(p->state == SLEEPING)
         p->state = RUNNABLE;
-        popcli();
-        return 0;
+       break;
+
       case SIGSTOP:
         p->stopped = 1;
-        popcli();
-        return 0;
+      break;
+
       case SIGCONT:
-        if (p->stopped == 1) {
+        if (p->stopped == 1) 
           p->pendingsig |= (1 << signum);
-          popcli();
-          return 0;
-        }
-        popcli();
-        return -1;
+        else return -1;
+      break;
+
       default:
         p->pendingsig |= (1 << signum);
-        popcli();
-        return 0;
       }
+      return 0;
   }
-  popcli();
   return -1;
 }
 
@@ -604,10 +602,12 @@ sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
   }
 
   if(oldact){
-    oldact->sa_handler = proc -> signalhandlers[sigNum]; 
-    oldact->sigmask = proc -> sigmask; 
+    oldact = proc ->signalhandlers[sigNum]; 
   }
-  proc -> signalhandlers[sigNum] = act->sa_handler;  //link the new handler to this signal
+
+  // when I just put act in signalhandlers[sigNum] i got "error: assignment discards ‘const’ qualifier from pointer target type [-Werror=discarded-qualifiers]"
+  proc -> signalhandlers[sigNum]->sa_handler = act ->sa_handler;       
+  proc -> signalhandlers[sigNum]->sigmask = act ->sigmask;       
   return 0; 
 }
 
@@ -616,7 +616,6 @@ sigret(void){
   struct proc *proc = myproc();
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
-  proc->ignore_signals = 0;
 }
 
 
@@ -646,28 +645,31 @@ handlecontsig(struct proc *p){
 void handlesignals(void){
   struct proc *p = myproc();
   uint sizeofsigret;
-  if (!p || p->ignore_signals) {
+  if (!p ) {
     return;
   }
   if (p->stopped) {
     handlecontsig(p);
   }
   for (int i = 0; i < SIG_NUM; i++) {
+    if (((1 << i) & p->signalhandlers[i]->sigmask)){                  // if handling this signal is not allowd by proc mask - continue.
+      continue;
+    }
+
     if (((1 << i) & p->pendingsig) == 0){                              // if the bit of signal is not activated (set to 1) then we continue to the next one.
       continue;
     }
     p->pendingsig ^= (1 << i);                                          // xor which remove the signal from pending signals.
 
-    if (p->signalhandlers[i] == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
+    if (p->signalhandlers[i]->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
       continue;
     }
 
-    if (p->signalhandlers[i] == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
+    if (p->signalhandlers[i]->sa_handler == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
       kill(p->pid, SIGKILL);
       continue;
     }
 
-    p->ignore_signals = 1;                                              // activate ignore signals while moving from kernel space to user space.
     
     p->tf->esp -= sizeof(struct trapframe);                             // make space foe trapframe save.
     memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
@@ -681,7 +683,7 @@ void handlesignals(void){
     p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
     *((int *) (p->tf->esp + 4)) = i;                                    // push to stack signum parameter
     *((int *) (p->tf->esp)) = p->tf->esp;                               // push to stack return address of sigret
-    p->tf->eip = (uint) p->signalhandlers[i];                           // move eip to the handler's func in user space to run it.
+    p->tf->eip = (uint) p->signalhandlers[i]->sa_handler;                           // move eip to the handler's func in user space to run it.
     break;
   }
 }
