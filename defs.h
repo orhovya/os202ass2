@@ -122,6 +122,7 @@ void            wakeup(void*);
 void            yield(void);
 
 void            sigret(void);
+int             sigaction(int sigNum,const struct sigaction *,struct sigaction *);
 void            sigretstart(void);
 void            sigretend(void);
 

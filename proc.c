@@ -590,17 +590,6 @@ procdump(void)
 int 
 sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
   struct proc *proc = myproc();
-
-  if(sigNum <0 || sigNum > (SIG_NUM-1)){        //this signal doesn't exist in the system 
-    return -1;
-  }
-  if(sigNum == SIGKILL || sigNum == SIGSTOP){
-    return -1;
-  }
-  if(act->sigmask < 0){
-    return -1;
-  }
-
   if(oldact){
     oldact = proc ->signalhandlers[sigNum]; 
   }

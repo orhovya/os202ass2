@@ -68,8 +68,3 @@ struct proc {
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
-
-struct sigaction {
-  void (*sa_handler)(int);
-  uint sigmask;
-};
