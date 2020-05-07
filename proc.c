@@ -260,7 +260,7 @@ fork(void)
   np->state = RUNNABLE;
 
   release(&ptable.lock);
-
+  cprintf("Fork function, created new process with id %d\n",np->pid);
   return pid;
 }
 
@@ -526,6 +526,7 @@ wakeup(void *chan)
 int
 kill(int pid, int signum)
 {
+  cprintf("entered kill func in proc.c with pid %d and signum %d\n",pid,signum);
   struct proc *p;
   if( (pid < 0) || (signum < 0) || (signum > (SIG_NUM-1)) ){
     return -1;
@@ -537,23 +538,30 @@ kill(int pid, int signum)
     }
     switch (signum) {
       case SIGKILL:
+        cprintf("SigKill signal was sent to pid %d\n",p->pid);
         p->killed = 1;
-      // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
-        p->state = RUNNABLE;
-       break;
+        // Wake process from sleep if necessary.
+        if(p->state == SLEEPING)
+          p->state = RUNNABLE;
+        cprintf("after SigKill of process pid is %d and signal state of processs is %d\n",p->pid,p->state);
+        break;
 
       case SIGSTOP:
+        cprintf("In SIG_STOP of process pid is %d \n",p->pid);
         p->stopped = 1;
       break;
 
       case SIGCONT:
-        if (p->stopped == 1) 
+        cprintf("In SIG_CONT of process pid is %d \n",p->pid);
+        if (p->stopped == 1) {
           p->pendingsig |= (1 << signum);
+        cprintf("After SIG_CONT of process pid is %d, signum was added to pending signals of proc \n",p->pid);
+        }
         else return -1;
       break;
 
       default:
+        cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
         p->pendingsig |= (1 << signum);
       }
       return 0;
@@ -621,11 +629,14 @@ sigret(void){
 
 void 
 handlecontsig(struct proc *p){
+  cprintf("In handle cont sig func for process %d .\n",p->pid);
   while (1) {
     if (p->pendingsig & (1 << SIGCONT)) {
+      cprintf("In handle cont sig func for process %d -  Got sig cont in pending signals. .\n",p->pid);
       pushcli();
       if (cas(&p->stopped, 1, 0)) {
         p->pendingsig ^= (1 << SIGCONT);
+        cprintf("In handle cont sig func for process %d -  Handled cont sig and reverted to 0 in pending signals.\n",p->pid);
       }
       popcli();
       return;
@@ -642,29 +653,36 @@ void handlesignals(void){
     return;
   }
   if (p->stopped) {
+    cprintf("procss is stopped , will enter handel contsig.\n");
     handlecontsig(p);
   }
-
+  // cprintf("In handlesignals, entering for Loop.\n");
   for (int i = 0; i < SIG_NUM; i++) {
+    
     if (((1 << i) & ((struct sigaction*)(p->signalhandlers[i]))->sigmask)){                  // if handling this signal is not allowd by proc mask - continue.
+      cprintf("In handlesignals, the signal that is being handled is %d an it is in sigmask so skipped.\n",i);
       continue;
     }
 
     if (((1 << i) & p->pendingsig) == 0){                              // if the bit of signal is not activated (set to 1) then we continue to the next one.
+      // cprintf("In handlesignals, the signal that is being handled is %d and it is not set in pending signals of proc.\n",i);
       continue;
     }
     p->pendingsig ^= (1 << i);                                          // xor which remove the signal from pending signals.
 
     if (((struct sigaction*)(p->signalhandlers[i]))->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
+      cprintf("In handlesignals, the signal that is being handled is %d and it is SIG_IGN so ignored.\n",i);
+
       continue;
     }
 
     if (((struct sigaction*)(p->signalhandlers[i]))->sa_handler == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
+      cprintf("In handlesignals, the signal that is being handled is %d and it is SIGKILL, activate kill func with pid %d .\n",i,p->pid);
       kill(p->pid, SIGKILL);
       continue;
     }
 
-    
+    cprintf("In handlesignals, the signal that is being handled is %d and it is user signal\n",i);
     p->tf->esp -= sizeof(struct trapframe);                             // make space foe trapframe save.
     memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
     p->trapframebackup = (void *) (p->tf->esp);                         // save to backup trapframe the current trapframe
@@ -677,7 +695,7 @@ void handlesignals(void){
     p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
     *((int *) (p->tf->esp + 4)) = i;                                    // push to stack signum parameter
     *((int *) (p->tf->esp)) = p->tf->esp;                               // push to stack return address of sigret
-   // p->tf->eip = (uint)((struct sigaction*)(p->signalhandlers[i]))->sa_handler;                           // move eip to the handler's func in user space to run it.
+    p->tf->eip = (uint)((struct sigaction*)(p->signalhandlers[i]))->sa_handler;                           // move eip to the handler's func in user space to run it.
     break;
   }
 }

@@ -1777,6 +1777,10 @@ main(int argc, char *argv[])
       infinite_loop_sig_handler,
       newmask
   };
+  struct sigaction handler_print = {
+    print_some_else,
+    newmask
+  };
   struct sigaction old_handler;
 
   //--------- 2.2 MASKS -------------
@@ -1794,7 +1798,7 @@ main(int argc, char *argv[])
   sigaction(6, &handler, &old_handler); 
   //if old_handler.sa is the same as print_some_else, then it was changed from the outside
   printf(1, "old handler action: 0x%p expected addr: 0x%p\n", old_handler.sa_handler, infinite_loop_sig_handler);
-
+  sigaction(3,&handler_print, 0);
   //------ 2.4 -----------
   // (1) ignoring sigkill
   if(fork() == 0){
@@ -1809,8 +1813,8 @@ main(int argc, char *argv[])
     printf(1, "ERROR: Default handler doesnt kill the process, test 2.4 (2)\n");
   } 
 
-  // (3) SIGSTOP-SIGCONT test
-  // sholud print: parent1, child, parent2
+  // // (3) SIGSTOP-SIGCONT test
+  // // sholud print: parent1, child, parent2
   if((cpid = fork()) == 0){
     sleep(20);
     printf(1,"Child\n");
@@ -1824,19 +1828,33 @@ main(int argc, char *argv[])
     printf(1,"Parent2\n");
   }
   
-  // (4) SIG_IGN is really ignoring the function
-  handler.sa_handler = (void*)1; //1=SIG_IGN
-  sigaction(1, &handler, 0);
-  kill(getpid(), 1);
 
-  // (5) no NESTED user signal handlers
-  handler.sa_handler = infinite_loop_sig_handler;
-  sigaction(6, &handler, 0);
-  kill(getpid(), 6);
 
-  // (6) making sure the mask was set back to initial mask
-  // if the forked process continues instead of exiting that means
-  // that the flag for sig num 10 is 0 instead of 1
+  // // (3) User level signal handler check
+  if((cpid = fork()) == 0){
+    sleep(20);
+    printf(1,"Child in user level \n");
+    exit();
+  } else {
+    kill(cpid,3);
+    sleep(100);
+    printf(1,"Parent in user level after signal 3 send.\n");
+    sleep(100);
+    kill(cpid, 9);
+  }
+  // // // (4) SIG_IGN is really ignoring the function
+  // handler.sa_handler = (void*)1; //1=SIG_IGN
+  // sigaction(1, &handler, 0);
+  // kill(getpid(), 1);
+
+  // // (5) no NESTED user signal handlers
+  // handler.sa_handler = infinite_loop_sig_handler;
+  // sigaction(6, &handler, 0);
+  // kill(getpid(), 6);
+
+  // // (6) making sure the mask was set back to initial mask
+  // // if the forked process continues instead of exiting that means
+  // // that the flag for sig num 10 is 0 instead of 1
   if(fork() == 0){
     kill(getpid(), 10);
     exit();
