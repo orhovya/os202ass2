@@ -378,7 +378,7 @@ scheduler(void)
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+      if(p->state != RUNNABLE || p->stopped) 
         continue;
 
       // Switch to chosen process.  It is the process's job
@@ -631,7 +631,8 @@ sigret(void){
 
 
 void 
-handlecontsig(struct proc *p){
+handlecontsig(){
+  struct proc *p = myproc();
   cprintf("In handle cont sig func for process %d .\n",p->pid);
   while (1) {
     if (p->pendingsig & (1 << SIGCONT)) {
@@ -651,19 +652,20 @@ handlecontsig(struct proc *p){
 
 void handlesignals(void){
   struct proc *p = myproc();
-
+  struct sigaction* currAction;
   uint sizeofsigret;
-  if (!p ) {
+  if (!p) {
     return;
   }
   if (p->stopped) {
     cprintf("procss is stopped , will enter handel contsig.\n");
-    handlecontsig(p);
+    handlecontsig();
   }
   // cprintf("In handlesignals, entering for Loop.\n");
   for (int i = 0; i < SIG_NUM; i++) {
-    
-    if (((1 << i) & ((struct sigaction*)(p->signalhandlers[i]))->sigmask)){                  // if handling this signal is not allowd by proc mask - continue.
+    currAction = (struct sigaction*)(p->signalhandlers[i]);
+
+    if (((1 << i) & currAction->sigmask) & (i !=  SIGKILL) & (i != SIGSTOP) ){ // if handling this signal is not allowd by proc mask - continue.
       cprintf("In handlesignals, the signal that is being handled is %d an it is in sigmask so skipped.\n",i);
       continue;
     }
@@ -674,15 +676,19 @@ void handlesignals(void){
     }
     p->pendingsig ^= (1 << i);                                          // xor which remove the signal from pending signals.
 
-    if (((struct sigaction*)(p->signalhandlers[i]))->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
+    if (currAction->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
       cprintf("In handlesignals, the signal that is being handled is %d and it is SIG_IGN so ignored.\n",i);
-
       continue;
     }
 
-    if (((struct sigaction*)(p->signalhandlers[i]))->sa_handler == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
+    if (currAction->sa_handler == (void *) SIG_DFL || currAction->sa_handler == (void *) SIGKILL) {                     // default signal is sigkill, so if givven we activate it straightforward.
       cprintf("In handlesignals, the signal that is being handled is %d and it is SIGKILL, activate kill func with pid %d .\n",i,p->pid);
       kill(p->pid, SIGKILL);
+      continue;
+    }
+
+    if (currAction->sa_handler == (void *) SIGSTOP) { 
+      handlecontsig();
       continue;
     }
 
@@ -699,7 +705,7 @@ void handlesignals(void){
     *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
     *((int *) (p->tf->esp - 8)) = p->tf->esp;                               // push to stack return address of sigret
     p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
-    p->tf->eip = (uint)((struct sigaction*)(p->signalhandlers[i]))->sa_handler;                           // move eip to the handler's func in user space to run it.
+    p->tf->eip = (uint)(currAction->sa_handler);                           // move eip to the handler's func in user space to run it.
     break;
   }
 }
