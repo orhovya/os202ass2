@@ -531,7 +531,7 @@ kill(int pid, int signum)
   if( (pid < 0) || (signum < 0) || (signum > (SIG_NUM-1)) ){
     return -1;
   }
-
+  acquire(&ptable.lock);
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
     if (p->pid != pid) {
       continue;
@@ -564,8 +564,10 @@ kill(int pid, int signum)
         cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
         p->pendingsig |= (1 << signum);
       }
+      release(&ptable.lock);
       return 0;
   }
+  release(&ptable.lock);
   return -1;
 }
 
@@ -636,6 +638,7 @@ handlecontsig(struct proc *p){
       cprintf("In handle cont sig func for process %d -  Got sig cont in pending signals. .\n",p->pid);
       pushcli();
       if (cas(&p->stopped, 1, 0)) {
+        cprintf("In handle cont sig func for process %d - stopped value is %d.\n",p->pid,p->stopped);
         p->pendingsig ^= (1 << SIGCONT);
         cprintf("In handle cont sig func for process %d -  Handled cont sig and reverted to 0 in pending signals.\n",p->pid);
       }

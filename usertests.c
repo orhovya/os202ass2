@@ -1815,33 +1815,33 @@ main(int argc, char *argv[])
 
   // // (3) SIGSTOP-SIGCONT test
   // // sholud print: parent1, child, parent2
-  // if((cpid = fork()) == 0){
-  //   sleep(20);
-  //   printf(1,"Child\n");
-  //   exit();
-  // } else {
-  //   kill(cpid,SIGSTOP);
-  //   sleep(100);
-  //   printf(1,"Parent1\n");
-  //   kill(cpid, SIGCONT);
-  //   sleep(100);
-  //   printf(1,"Parent2\n");
-  // }
+  if((cpid = fork()) == 0){
+    sleep(20);
+    printf(1,"Child\n");
+    exit();
+  } else {
+    kill(cpid,SIGSTOP);
+    sleep(100);
+    printf(1,"Parent1\n");
+    kill(cpid, SIGCONT);
+    sleep(100);
+    printf(1,"Parent2\n");
+  }
   
 
 
   // // (3) User level signal handler check
-  if((cpid = fork()) == 0){
-    sleep(20);
-    printf(1,"Child in user level \n");
-    exit();
-  } else {
-    kill(cpid,3);
-    sleep(100);
-    printf(1,"Parent in user level after signal 3 send.\n");
-    sleep(100);
-    kill(cpid, 9);
-  }
+  // if((cpid = fork()) == 0){
+  //   sleep(20);
+  //   printf(1,"Child in user level \n");
+  //   exit();
+  // } else {
+  //   kill(cpid,3);
+  //   sleep(100);
+  //   printf(1,"Parent in user level after signal 3 send.\n");
+  //   sleep(100);
+  //   kill(cpid, 9);
+  // }
   // // // (4) SIG_IGN is really ignoring the function
   // handler.sa_handler = (void*)1; //1=SIG_IGN
   // sigaction(1, &handler, 0);
@@ -1863,7 +1863,7 @@ main(int argc, char *argv[])
   // wait();
   // wait();
   // wait();
-  wait();
+  // wait();
   exit();
 }
 /*
