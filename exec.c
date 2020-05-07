@@ -101,11 +101,10 @@ exec(char *path, char **argv)
   curproc->tf->esp = sp;
 
   for (int i = 0; i < SIG_NUM; i++) {
-    if (curproc->signalhandlers[i]->sa_handler == (void*)SIG_IGN) {
+    if (((struct sigaction*)curproc->signalhandlers[i])->sa_handler == (void*)SIG_IGN) {
       continue;
     }
-    curproc->signalhandlers[i]->sa_handler = SIG_DFL;
-    curproc->signalhandlers[i]->sigmask = 0; //???
+    curproc->helper_sigaction[i] = (struct sigaction){ SIG_DFL, 0};
   }
  
   switchuvm(curproc);

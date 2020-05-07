@@ -58,7 +58,8 @@ struct proc {
   char name[16];               // Process name (debugging)
   uint pendingsig;             // Pending signals of the process.
   uint sigmask;                // Array of signal mask of the process.
-  struct sigaction *signalhandlers[32];
+  struct sigaction helper_sigaction[32];     //
+  void*  signalhandlers[32];
   struct trapframe *trapframebackup; 
   int stopped;
 };

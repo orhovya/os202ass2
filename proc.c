@@ -123,6 +123,18 @@ allocproc(void)
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
 
+  //cprintf("curproc->pid = %d \n",p->pid);
+  // init proc signals array and variables
+  for (int i = 0; i < SIG_NUM; i++) {
+    p->helper_sigaction[i] = (struct sigaction){ SIG_DFL, 0};
+    p->signalhandlers[i] = &(p->helper_sigaction[i]);
+ //   cprintf("curproc->signalhandlers[i]->sa_handler = %d \n",p->signalhandlers[i]->sa_handler);
+ //   cprintf("curproc->signalhandlers[i]->sigmask = %d  \n",p->signalhandlers[i]->sigmask);
+  }
+  p->pendingsig = 0;
+  p->sigmask = 0;
+  p->trapframebackup = 0;
+
   return p;
 }
 
@@ -160,14 +172,7 @@ userinit(void)
   // run this process. the acquire forces the above
   // writes to be visible, and the lock is also needed
   // because the assignment might not be atomic.
-  p->pendingsig = 0;
-  p->sigmask = 0;
-  /*for (int i = 0; i < 32; i++) {
-    p->signalhandlers[i]->sa_handler = SIG_DFL;
-    p->signalhandlers[i]->sigmask = 0;
 
-  }*/
-  p->trapframebackup = 0;
 
   acquire(&ptable.lock);
 
@@ -238,9 +243,15 @@ fork(void)
   np->pendingsig = 0;
   np->sigmask = curproc->sigmask;
   // int n = sizeof(curproc->signalhandlers) / sizeof(curproc->signalhandlers[0]);
+  //cprintf("curproc->pid = %d \n",curproc->pid);
+
   for (int i = 0; i < SIG_NUM; i++) {
      np->signalhandlers[i] = curproc->signalhandlers[i];
+   //cprintf("curproc->signalhandlers[i]->sa_handler = %d \n",((struct sigaction*)(curproc->signalhandlers[i]))->sa_handler);
+  // cprintf("curproc->signalhandlers[i]->sigmask = %d  \n",((struct sigaction*)(curproc->signalhandlers[i]))->sigmask);
   }
+
+
   np->trapframebackup = 0;
   np->stopped = 0;
 
@@ -591,12 +602,12 @@ int
 sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
   struct proc *proc = myproc();
   if(oldact){
-    oldact = proc ->signalhandlers[sigNum]; 
-  }
+    oldact->sa_handler = ((struct sigaction*) proc->signalhandlers[sigNum])->sa_handler; 
+    oldact->sigmask =  ((struct sigaction*) proc->signalhandlers[sigNum])->sigmask;
 
-  // when I just put act in signalhandlers[sigNum] i got "error: assignment discards ‘const’ qualifier from pointer target type [-Werror=discarded-qualifiers]"
-  proc -> signalhandlers[sigNum]->sa_handler = act ->sa_handler;       
-  proc -> signalhandlers[sigNum]->sigmask = act ->sigmask;       
+  }
+  ((struct sigaction*) proc->signalhandlers[sigNum])->sa_handler =act->sa_handler;
+  ((struct sigaction*) proc->signalhandlers[sigNum])->sigmask =act->sigmask;
   return 0; 
 }
 
@@ -610,29 +621,22 @@ sigret(void){
 
 void 
 handlecontsig(struct proc *p){
-  uint sigcont;
-  int checkcont;
   while (1) {
-    sigcont = (1 << SIGCONT);
-    checkcont = p->pendingsig & sigcont;
-    if (checkcont) {
+    if (p->pendingsig & (1 << SIGCONT)) {
       pushcli();
-
       if (cas(&p->stopped, 1, 0)) {
         p->pendingsig ^= (1 << SIGCONT);
       }
-
       popcli();
-      break;
-    } else {
-      yield();
-  }
+      return;
+    } else yield();
   }
 }
 
 
 void handlesignals(void){
   struct proc *p = myproc();
+
   uint sizeofsigret;
   if (!p ) {
     return;
@@ -640,8 +644,9 @@ void handlesignals(void){
   if (p->stopped) {
     handlecontsig(p);
   }
+
   for (int i = 0; i < SIG_NUM; i++) {
-    if (((1 << i) & p->signalhandlers[i]->sigmask)){                  // if handling this signal is not allowd by proc mask - continue.
+    if (((1 << i) & ((struct sigaction*)(p->signalhandlers[i]))->sigmask)){                  // if handling this signal is not allowd by proc mask - continue.
       continue;
     }
 
@@ -650,11 +655,11 @@ void handlesignals(void){
     }
     p->pendingsig ^= (1 << i);                                          // xor which remove the signal from pending signals.
 
-    if (p->signalhandlers[i]->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
+    if (((struct sigaction*)(p->signalhandlers[i]))->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
       continue;
     }
 
-    if (p->signalhandlers[i]->sa_handler == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
+    if (((struct sigaction*)(p->signalhandlers[i]))->sa_handler == (void *) SIG_DFL) {                     // default signal is sigkill, so if givven we activate it straightforward.
       kill(p->pid, SIGKILL);
       continue;
     }
@@ -672,7 +677,7 @@ void handlesignals(void){
     p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
     *((int *) (p->tf->esp + 4)) = i;                                    // push to stack signum parameter
     *((int *) (p->tf->esp)) = p->tf->esp;                               // push to stack return address of sigret
-    p->tf->eip = (uint) p->signalhandlers[i]->sa_handler;                           // move eip to the handler's func in user space to run it.
+   // p->tf->eip = (uint)((struct sigaction*)(p->signalhandlers[i]))->sa_handler;                           // move eip to the handler's func in user space to run it.
     break;
   }
 }

@@ -1748,7 +1748,12 @@ rand()
 #include "types.h"
 #include "stat.h"
 #include "user.h"
-
+#define SIG_DFL 0
+#define SIG_IGN 1
+#define SIGKILL 9
+#define SIGSTOP 17
+#define SIGCONT 19
+#define SIG_NUM 32
 
 
 
@@ -1767,24 +1772,21 @@ main(int argc, char *argv[])
   printf(1,"Tests starting \n");
  uint newmask =  (1<<10) | (1<<18), 
   mask;
-  /*int cpid;
+  int cpid;
   struct sigaction handler = {
       infinite_loop_sig_handler,
       newmask
   };
   struct sigaction old_handler;
-  */
+
   //--------- 2.2 MASKS -------------
   printf(1,"new mask is: 0x%p\n", newmask);
-  //mask = sigprocmask(newmask);
-  mask = 0;
+  mask = sigprocmask(newmask);
   printf(1,"mask before replacement: 0x%p\n", mask);
- // newmask = sigprocmask(newmask);
-    newmask = 0;
-
+  newmask = sigprocmask(newmask);
   printf(1,"mask after replacement: 0x%p\n", newmask);
 
-  /* // -------- 2.1.4 registering signal handlers ---------
+  // -------- 2.1.4 registering signal handlers ---------
   // (1) making sure the sig handler can not be changes after it was set
   sigaction(6, &handler, 0); //handler for signum 6 is now handler
   sigaction(6, &handler, &old_handler); //old_handler supposed to hold handler fields' values
@@ -1814,10 +1816,10 @@ main(int argc, char *argv[])
     printf(1,"Child\n");
     exit();
   } else {
-    kill(cpid,17);
+    kill(cpid,SIGSTOP);
     sleep(100);
     printf(1,"Parent1\n");
-    kill(cpid, 19);
+    kill(cpid, SIGCONT);
     sleep(100);
     printf(1,"Parent2\n");
   }
@@ -1843,7 +1845,7 @@ main(int argc, char *argv[])
   wait();
   wait();
   wait();
-  wait();*/
+  wait();
   exit();
 }
 /*
