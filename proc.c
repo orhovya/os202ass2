@@ -260,7 +260,7 @@ fork(void)
   np->state = RUNNABLE;
 
   release(&ptable.lock);
-  cprintf("Fork function, created new process with id %d\n",np->pid);
+  cprintf("Fork function, created new process with id %d , Parent is %d\n",np->pid,curproc->pid);
   return pid;
 }
 
@@ -622,6 +622,7 @@ sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
 void 
 sigret(void){
   struct proc *proc = myproc();
+  cprintf("In sigret func, process %d return\n",proc->pid);
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
 }
@@ -692,9 +693,9 @@ void handlesignals(void){
     sizeofsigret  = (uint) &sigretend - (uint) &sigretstart;            // save the size of sigret function.
     p->tf->esp -= sizeofsigret;                                         // move esp to save space for sigret function call.
     memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);          // move to esp the beginning of sigret func.
+    *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
+    *((int *) (p->tf->esp - 8)) = p->tf->esp;                               // push to stack return address of sigret
     p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
-    *((int *) (p->tf->esp + 4)) = i;                                    // push to stack signum parameter
-    *((int *) (p->tf->esp)) = p->tf->esp;                               // push to stack return address of sigret
     p->tf->eip = (uint)((struct sigaction*)(p->signalhandlers[i]))->sa_handler;                           // move eip to the handler's func in user space to run it.
     break;
   }
