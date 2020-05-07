@@ -134,7 +134,7 @@ allocproc(void)
   p->pendingsig = 0;
   p->sigmask = 0;
   p->trapframebackup = 0;
-
+  p->inusermode = 0;
   return p;
 }
 
@@ -251,7 +251,7 @@ fork(void)
   // cprintf("curproc->signalhandlers[i]->sigmask = %d  \n",((struct sigaction*)(curproc->signalhandlers[i]))->sigmask);
   }
 
-
+  np->inusermode = 0;
   np->trapframebackup = 0;
   np->stopped = 0;
 
@@ -378,7 +378,7 @@ scheduler(void)
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE || p->stopped) 
+      if(p->state != RUNNABLE) 
         continue;
 
       // Switch to chosen process.  It is the process's job
@@ -536,36 +536,10 @@ kill(int pid, int signum)
     if (p->pid != pid) {
       continue;
     }
-    switch (signum) {
-      case SIGKILL:
-        cprintf("SigKill signal was sent to pid %d\n",p->pid);
-        p->killed = 1;
-        // Wake process from sleep if necessary.
-        if(p->state == SLEEPING)
-          p->state = RUNNABLE;
-        cprintf("after SigKill of process pid is %d and signal state of processs is %d\n",p->pid,p->state);
-        break;
-
-      case SIGSTOP:
-        cprintf("In SIG_STOP of process pid is %d \n",p->pid);
-        p->stopped = 1;
-      break;
-
-      case SIGCONT:
-        cprintf("In SIG_CONT of process pid is %d \n",p->pid);
-        if (p->stopped == 1) {
-          p->pendingsig |= (1 << signum);
-        cprintf("After SIG_CONT of process pid is %d, signum was added to pending signals of proc \n",p->pid);
-        }
-        else return -1;
-      break;
-
-      default:
-        cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
-        p->pendingsig |= (1 << signum);
-      }
-      release(&ptable.lock);
-      return 0;
+    cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
+    p->pendingsig |= (1 << signum);
+    release(&ptable.lock);
+    return 0;
   }
   release(&ptable.lock);
   return -1;
@@ -627,26 +601,8 @@ sigret(void){
   cprintf("In sigret func, process %d return\n",proc->pid);
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
-}
-
-
-void 
-handlecontsig(){
-  struct proc *p = myproc();
-  cprintf("In handle cont sig func for process %d .\n",p->pid);
-  while (1) {
-    if (p->pendingsig & (1 << SIGCONT)) {
-      cprintf("In handle cont sig func for process %d -  Got sig cont in pending signals. .\n",p->pid);
-      pushcli();
-      if (cas(&p->stopped, 1, 0)) {
-        cprintf("In handle cont sig func for process %d - stopped value is %d.\n",p->pid,p->stopped);
-        p->pendingsig ^= (1 << SIGCONT);
-        cprintf("In handle cont sig func for process %d -  Handled cont sig and reverted to 0 in pending signals.\n",p->pid);
-      }
-      popcli();
-      return;
-    } else yield();
-  }
+  proc->inusermode = 0;
+  proc->sigmask = p->sigmaskbackup;    
 }
 
 
@@ -658,14 +614,37 @@ void handlesignals(void){
     return;
   }
   if (p->stopped) {
-    cprintf("procss is stopped , will enter handel contsig.\n");
-    handlecontsig();
-  }
+    cprintf("procss %d is stopped , will enter handel contsig.\n",p->pid);
+    stopped_loop:
+    cprintf("procss %d is stopped , entered loop.\n",p->pid);
+      while (1) {
+        for (int i = 0; i < SIG_NUM; i++) {
+          currAction = (struct sigaction*)(p->signalhandlers[i]);
+          if (p->pendingsig & (1 << SIGCONT) || currAction->sa_handler == (void *) SIGCONT) {
+            cprintf("In handle cont sig func for process %d -  Got sig cont in pending signals. .\n",p->pid);
+            pushcli();
+            if (cas(&p->stopped, 1, 0)) {
+              cprintf("In handle cont sig func for process %d - stopped value is %d.\n",p->pid,p->stopped);
+              p->pendingsig ^= (1 << SIGCONT);
+              cprintf("In handle cont sig func for process %d -  Handled cont sig and reverted to 0 in pending signals.\n",p->pid);
+            }
+            popcli();
+            break;
+          } 
+        }
+        if(p->stopped ==0){
+          p->sigmask = p->sigmaskbackup;
+          break;
+        }
+        else
+          yield();
+      }
+    }
   // cprintf("In handlesignals, entering for Loop.\n");
   for (int i = 0; i < SIG_NUM; i++) {
     currAction = (struct sigaction*)(p->signalhandlers[i]);
 
-    if (((1 << i) & currAction->sigmask) & (i !=  SIGKILL) & (i != SIGSTOP) ){ // if handling this signal is not allowd by proc mask - continue.
+    if (((1 << i) & p->sigmask) & (i !=  SIGKILL) & (i != SIGSTOP) ){ // if handling this signal is not allowd by proc mask - continue.
       cprintf("In handlesignals, the signal that is being handled is %d an it is in sigmask so skipped.\n",i);
       continue;
     }
@@ -680,32 +659,42 @@ void handlesignals(void){
       cprintf("In handlesignals, the signal that is being handled is %d and it is SIG_IGN so ignored.\n",i);
       continue;
     }
+    if (i == SIGSTOP || currAction->sa_handler == (void *) SIGSTOP) { 
+     p->stopped=1;
+     goto stopped_loop;
+    }
 
     if (currAction->sa_handler == (void *) SIG_DFL || currAction->sa_handler == (void *) SIGKILL) {                     // default signal is sigkill, so if givven we activate it straightforward.
       cprintf("In handlesignals, the signal that is being handled is %d and it is SIGKILL, activate kill func with pid %d .\n",i,p->pid);
-      kill(p->pid, SIGKILL);
+      p->killed = 1;
+        // Wake process from sleep if necessary.
+      if(p->state == SLEEPING)
+        p->state = RUNNABLE;  
       continue;
     }
-
-    if (currAction->sa_handler == (void *) SIGSTOP) { 
-      handlecontsig();
+    p->sigmaskbackup = p->sigmask; /////////////////////?????????????????/ need to check when should sigmask backup happen.
+    p->sigmask = currAction->sigmask;
+    if(p->inusermode)
+      p->sigmask = p->sigmaskbackup;
       continue;
+    else{
+      p->inusermode = 1;
+
+      cprintf("In handlesignals, the signal that is being handled is %d and it is user signal\n",i);
+      p->tf->esp -= sizeof(struct trapframe);                             // make space foe trapframe save.
+      memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
+      p->trapframebackup = (void *) (p->tf->esp);                         // save to backup trapframe the current trapframe
+      
+      // activate the signal handler in user space with "injecting" return to sigret function after finishing.
+
+      sizeofsigret  = (uint) &sigretend - (uint) &sigretstart;            // save the size of sigret function.
+      p->tf->esp -= sizeofsigret;                                         // move esp to save space for sigret function call.
+      memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);          // move to esp the beginning of sigret func.
+      *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
+      *((int *) (p->tf->esp - 8)) = p->tf->esp;                               // push to stack return address of sigret
+      p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
+      p->tf->eip = (uint)(currAction->sa_handler);                           // move eip to the handler's func in user space to run it.
+      break;
     }
-
-    cprintf("In handlesignals, the signal that is being handled is %d and it is user signal\n",i);
-    p->tf->esp -= sizeof(struct trapframe);                             // make space foe trapframe save.
-    memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
-    p->trapframebackup = (void *) (p->tf->esp);                         // save to backup trapframe the current trapframe
-    
-    // activate the signal handler in user space with "injecting" return to sigret function after finishing.
-
-    sizeofsigret  = (uint) &sigretend - (uint) &sigretstart;            // save the size of sigret function.
-    p->tf->esp -= sizeofsigret;                                         // move esp to save space for sigret function call.
-    memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);          // move to esp the beginning of sigret func.
-    *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
-    *((int *) (p->tf->esp - 8)) = p->tf->esp;                               // push to stack return address of sigret
-    p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
-    p->tf->eip = (uint)(currAction->sa_handler);                           // move eip to the handler's func in user space to run it.
-    break;
   }
 }

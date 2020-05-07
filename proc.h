@@ -62,6 +62,8 @@ struct proc {
   void*  signalhandlers[32];
   struct trapframe *trapframebackup; 
   int stopped;
+  int inusermode;
+  uint sigmaskbackup;
 };
 
 // Process memory is laid out contiguously, low addresses first:
