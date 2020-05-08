@@ -1772,7 +1772,7 @@ main(int argc, char *argv[])
   printf(1,"Tests starting \n");
  uint newmask =  (1<<10) | (1<<18), 
   mask;
-  int cpid;
+  // int cpid;
   struct sigaction handler = {
       infinite_loop_sig_handler,
       newmask
@@ -1801,32 +1801,34 @@ main(int argc, char *argv[])
   sigaction(3,&handler_print, 0);
   //------ 2.4 -----------
   // (1) ignoring sigkill
-  if(fork() == 0){
-    mask = sigprocmask(1<<9); // 1 in the 9th bit means ignoring the bit
-    kill(getpid(), 9);
-    printf(1, "ERROR: it ignores kill, test 2.4 (1)\n");
-  }
+  kill(getpid(),3);
+  kill(getpid(),6);
+  // if(fork() == 0){
+  //   mask = sigprocmask(1<<9); // 1 in the 9th bit means ignoring the bit
+  //   kill(getpid(), 9);
+  //   printf(1, "ERROR: it ignores kill, test 2.4 (1)\n");
+  // }
   
   // (2) SIG_DFL kills the process
-  if(fork() == 0){
-    kill(getpid(), 5);
-    printf(1, "ERROR: Default handler doesnt kill the process, test 2.4 (2)\n");
-  } 
+  // if(fork() == 0){
+  //   kill(getpid(), 5);
+  //   printf(1, "ERROR: Default handler doesnt kill the process, test 2.4 (2)\n");
+  // } 
 
   // // (3) SIGSTOP-SIGCONT test
   // // sholud print: parent1, child, parent2
-  if((cpid = fork()) == 0){
-    sleep(20);
-    printf(1,"Child\n");
-    exit();
-  } else {
-    kill(cpid,SIGSTOP);
-    sleep(100);
-    printf(1,"Parent1\n");
-    kill(cpid, SIGCONT);
-    sleep(100);
-    printf(1,"Parent2\n");
-  }
+  // if((cpid = fork()) == 0){
+  //   sleep(20);
+  //   printf(1,"Child\n");
+  //   exit();
+  // } else {
+  //   kill(cpid,SIGSTOP);
+  //   sleep(100);
+  //   printf(1,"Parent1\n");
+  //   kill(cpid, SIGCONT);
+  //   sleep(100);
+  //   printf(1,"Parent2\n");
+  // }
   
 
 
@@ -1843,27 +1845,27 @@ main(int argc, char *argv[])
   //   kill(cpid, 9);
   // }
   // // // (4) SIG_IGN is really ignoring the function
-  handler.sa_handler = (void*)1; //1=SIG_IGN
-  sigaction(1, &handler, 0);
-  kill(getpid(), 1);
+  // handler.sa_handler = (void*)1; //1=SIG_IGN
+  // sigaction(1, &handler, 0);
+  // kill(getpid(), 1);
 
   // // (5) no NESTED user signal handlers
-  handler.sa_handler = infinite_loop_sig_handler;
-  sigaction(6, &handler, 0);
-  kill(getpid(), 6);
+  // handler.sa_handler = infinite_loop_sig_handler;
+  // sigaction(6, &handler, 0);
+  // kill(getpid(), 6);
 
   // // (6) making sure the mask was set back to initial mask
   // // if the forked process continues instead of exiting that means
   // // that the flag for sig num 10 is 0 instead of 1
-  if(fork() == 0){
-    kill(getpid(), 10);
-    exit();
-  }
+  // if(fork() == 0){
+  //   kill(getpid(), 10);
+  //   exit();
+  // }
   
-  wait();
-  wait();
-  wait();
-  wait();
+  // wait();
+  // wait();
+  // wait();
+  // wait();
   exit();
 }
 /*

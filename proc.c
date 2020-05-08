@@ -602,7 +602,7 @@ sigret(void){
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
   proc->inusermode = 0;
-  proc->sigmask = p->sigmaskbackup;    
+  proc->sigmask = proc->sigmaskbackup;    
 }
 
 
@@ -674,9 +674,10 @@ void handlesignals(void){
     }
     p->sigmaskbackup = p->sigmask; /////////////////////?????????????????/ need to check when should sigmask backup happen.
     p->sigmask = currAction->sigmask;
-    if(p->inusermode)
+    if(p->inusermode){
       p->sigmask = p->sigmaskbackup;
       continue;
+    }
     else{
       p->inusermode = 1;
 
