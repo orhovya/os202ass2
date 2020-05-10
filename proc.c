@@ -602,7 +602,9 @@ sigret(void){
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
   proc->inusermode = 0;
+  // cprintf("In sigret handlers mask was %d", proc->sigmask);
   proc->sigmask = proc->sigmaskbackup;    
+  // cprintf("In sigret proc mask is %d", proc->sigmask);
 }
 
 
@@ -682,6 +684,7 @@ void handlesignals(void){
     p->sigmaskbackup = p->sigmask; /////////////////////?????????????????/ need to check when should sigmask backup happen.
     p->sigmask = currAction->sigmask;
     if(p->inusermode){
+      cprintf("in user mode already\n");
       p->sigmask = p->sigmaskbackup;
       continue;
     }
