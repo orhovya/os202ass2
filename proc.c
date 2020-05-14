@@ -21,15 +21,21 @@ extern void trapret(void);
 static void wakeup1(void *chan);
 
 
-void 
-change_state_cas(struct proc* p, int state){
-  int curr_val;
-    pushcli();
-    do{
-      curr_val = p->state;
-    }
-    while (!cas(&p->state, curr_val, state));
-    popcli(); 
+// void 
+// change_state_cas(struct proc* p, int state){
+//   int curr_val;
+//     pushcli();
+//     do{
+//       curr_val = p->state;
+//     }
+//     while (!cas(&p->state, curr_val, state));
+//     popcli(); 
+// }
+
+int 
+change_state_cas(struct proc* p, int curr_val , int state){
+  int val= cas(&p->state, curr_val, state);
+  return val;
 }
 
 void
@@ -115,7 +121,7 @@ allocproc(void)
   popcli();
 
   p->pid = allocpid();
-  cprintf("after loop allocproc  \n");
+  cprintf("after loop allocproc chosed pid is %d \n",p->pid);
 
   // Allocate kernel stack.
   if((p->kstack = kalloc()) == 0){
@@ -138,17 +144,18 @@ allocproc(void)
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
 
+  //cprintf("curproc->pid = %d \n",p->pid);
   // init proc signals array and variables
   for (int i = 0; i < SIG_NUM; i++) {
     p->helper_sigaction[i] = (struct sigaction){ SIG_DFL, 0};
     p->signalhandlers[i] = &(p->helper_sigaction[i]);
+ //   cprintf("curproc->signalhandlers[i]->sa_handler = %d \n",p->signalhandlers[i]->sa_handler);
+ //   cprintf("curproc->signalhandlers[i]->sigmask = %d  \n",p->signalhandlers[i]->sigmask);
   }
   p->pendingsig = 0;
   p->sigmask = 0;
   p->trapframebackup = 0;
   p->inusermode = 0;
-    cprintf("end of allocproc  \n");
-
   return p;
 }
 
@@ -182,21 +189,21 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
-  cprintf("userinit   \n");
+  // cprintf("userinit with pid %d and state %d \n",p->pid,p->state);
 
   // this assignment to p->state lets other cores
   // run this process. 
   
-  change_state_cas(p,RUNNABLE);
+  p->state = RUNNABLE;
 
-  cprintf("end of userinit   \n");
+  // cprintf("end of userinit with pid %d and state %d \n",p->pid,p->state);
 
 }
 
 // Grow current process's memory by n bytes.
 // Return 0 on success, -1 on failure.
 int
-growproc(int n)
+growproc(int n) 
 {
   uint sz;
   struct proc *curproc = myproc();
@@ -234,7 +241,7 @@ fork(void)
     kfree(np->kstack);
     np->kstack = 0;
     // Maybe not necessary to do with cas
-    change_state_cas(np,UNUSED);
+    np->state=UNUSED;
     return -1;
   }
   np->sz = curproc->sz;
@@ -268,7 +275,8 @@ fork(void)
   np->trapframebackup = 0;
   np->stopped = 0;
 
-  change_state_cas(np,RUNNABLE);
+  if(!change_state_cas(np,EMBRYO,RUNNABLE))
+        panic("fork: cas failed");
  
   cprintf("Fork function, created new process with id %d , Parent is %d\n",np->pid,curproc->pid);
   return pid;
@@ -301,9 +309,9 @@ exit(void)
   curproc->cwd = 0;
 
   pushcli();
-
-  change_state_cas(curproc,-ZOMBIE);
-
+  if(!change_state_cas(curproc,RUNNING,-ZOMBIE))
+    panic("exit cas did not work");
+  popcli();
   // Parent might be sleeping in wait().
   wakeup1(curproc->parent);
 
@@ -315,8 +323,9 @@ exit(void)
         wakeup1(initproc);
     }
   }
-  cprintf("in exit before sched\n");
+  // cprintf("in exit before sched\n");
   // Jump into the scheduler, never to return.
+  cprintf("b\n");
   sched();
   panic("zombie exit");
 }
@@ -326,52 +335,57 @@ exit(void)
 int
 wait(void)
 {
+
   struct proc *p;
-  int pid;
+  int havekids, pid;
   struct proc *curproc = myproc();
-  
+
   pushcli();
 
   for(;;){
-    // Scan through table looking for exited children.
-    do {
-      cprintf("in wait loop\n");
-        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-          if(p->parent != curproc)
-            continue;
-          }
-          // No point waiting if we don't have any children.
-          if (p == &ptable.proc[NPROC]) {                               
-            popcli();
-            return -1; 
-          }
-                  
-          // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-          if(p->state != ZOMBIE)
-              continue;
 
-          // Found one.
-          pid = p->pid;
-          kfree(p->kstack);
-          p->kstack = 0;
-          freevm(p->pgdir);
-          p->pid = 0;
-          p->parent = 0;
-          p->name[0] = 0;
-          p->killed = 0;
-          popcli();
-          return pid;
-      } while (!(cas(&p->state, ZOMBIE, UNUSED)));
+    if (!change_state_cas(curproc, RUNNING, -SLEEPING)) {
+      panic("running -> neg_sleeping cas failed");
+    }
 
-    
-    if(curproc->killed){
+    curproc->chan= curproc;
+
+    havekids = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->parent != curproc)
+        continue;
+      havekids = 1;
+      if(change_state_cas(p, ZOMBIE, UNUSED)){
+        // Found one.
+        pid = p->pid;
+        kfree(p->kstack);
+        p->kstack = 0;
+        freevm(p->pgdir);
+        p->pid = 0;
+        p->parent = 0;
+        p->name[0] = 0;
+        p->killed = 0;
+
+        curproc->chan= 0;
+        change_state_cas(curproc,-SLEEPING, RUNNING);
+
+        popcli();
+
+        return pid;
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || curproc->killed){
+      curproc->chan = 0;
+      if (!change_state_cas(curproc, -SLEEPING, RUNNING)) {
+        panic("neg_sleeping->running cas failed");
+      }
+
       popcli();
       return -1;
     }
-
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
-    cprintf("go to sleep in wait\n");
-    sleep(curproc, &ptable.lock);  //DOC: wait-sleep
+    sched();
   }
 }
 
@@ -391,7 +405,7 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  cprintf("first in scheduler\n");
+  cprintf("first in scheduler \n");
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -400,62 +414,55 @@ scheduler(void)
     pushcli();
 
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE) 
+      // if(p->state != RUNNABLE) 
+      if(!change_state_cas(p,RUNNABLE, RUNNING))
         continue;
 
 
       // Switch to chosen process.
-      c->proc = p;      
+      c->proc = p;   
+      // cprintf("in scheduler swtch pid %d and cpu is %d\n",p->pid,cpuid());
+   
       switchuvm(p);
-      change_state_cas(p,RUNNING);
+      // change_state_cas(p,RUNNING);
 
-      cprintf("in scheduler swtch \n");
+      cprintf("after change state in schedler state of pid %d\n",p->pid,p->state);
 
 
       swtch(&(c->scheduler), p->context);
-      cprintf("returend from scheduler swtch \n");
+      // cprintf("returend from scheduler swtch pid %d and cpu is %d\n",p->pid),cpuid();
 
       switchkvm();
 
-      cprintf("returend from scheduler switchkvm \n");
+      // cprintf("returend from scheduler switchkvm and pid is %d and cpu is %d\n",p->pid,cpuid());
 
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;      
       
-      if (p->state == -RUNNABLE){
-        cprintf("scheduler p->state == -RUNNABLE \n");
-        change_state_cas(p,RUNNABLE);
-        cprintf("scheduler state changed to RUNNABLE \n");
-
+      if (change_state_cas(p,-SLEEPING,SLEEPING)){
+        // cprintf("scheduler p->state == -SLEEPING for pid %d and state is %d and cpu is %d\n",p->pid,p->state,cpuid());
+      if(p->killed){
+        change_state_cas(p,SLEEPING,RUNNABLE);
+        // cprintf("scheduler state changed to RUNNABLE for pid and state is %d and cpu is %d\n",p->pid,p->state,cpuid());
+       }
       }
- 
 
-      if (p->state == -SLEEPING){
-          cprintf("scheduler p->state == -SLEEPING \n");
-        if(p->killed){
-          change_state_cas(p,RUNNABLE);
-          cprintf("scheduler state changed to RUNNABLE \n");
-        }
-        else{
-          change_state_cas(p,SLEEPING);
-          cprintf("scheduler state changed to SLEEPING \n");
-        }
+      if (change_state_cas(p,-RUNNABLE,RUNNABLE)){
+        // cprintf("scheduler state changed to RUNNABLE for pid %d and state is %d and cpu is %d\n",p->pid,p->state,cpuid());
       }
         
 
-      if (p->state == -ZOMBIE){
-        cprintf("scheduler p->state == -ZOMBIE \n");
-        change_state_cas(p,SLEEPING);
-        cprintf("scheduler state changed to SLEEPING before wakeup1 \n");
+      if (change_state_cas(p,-ZOMBIE,ZOMBIE)){
+        // cprintf("scheduler state changed to SLEEPING before wakeup1 \n");
         wakeup1(p->parent);
-        cprintf("scheduler returend from wakeup1 \n");
+        // cprintf("scheduler returend from wakeup1 \n");
       }
     }
     popcli();
   }
-  cprintf("scheduler exited from loop \n");
+  // cprintf("scheduler exited from loop \n");
 }
 
 // Enter scheduler.  Must hold only ptable.lock
@@ -473,28 +480,28 @@ sched(void)
   // insted of using lock on the table we will use only atomic opertions
 
   if(mycpu()->ncli != 1){
-    cprintf("mycpu()->ncli  = %d . \n",mycpu()->ncli);
+    // cprintf("mycpu()->ncli  = %d . \n",mycpu()->ncli);
     panic("sched locks" );
   }
+
   if(p->state == RUNNING )
     panic("sched running");
   if(readeflags()&FL_IF)
     panic("sched interruptible");
 
-  cprintf("sched reach the tests\n");  
+  // cprintf("sched reach the tests\n");  
 
   intena = mycpu()->intena;
   
-  cprintf("sched before swtch\n");  
-
+  // cprintf("sched before swtch\n");  
   swtch(&p->context, mycpu()->scheduler);
 
-  cprintf("sched complete swtch\n");  
+  // cprintf("sched complete swtch\n");  
 
   mycpu()->intena = intena;
 
 
-  cprintf("end of sched\n");  
+  // cprintf("end of sched\n");  
 
 
 }
@@ -503,11 +510,15 @@ sched(void)
 void
 yield(void)
 {
-  cprintf("enterd to yield\n");
+  // cprintf("enterd to yield with pid %d and state %d and cpu is %d\n",myproc()->pid,myproc()->state,cpuid());
   // needed????
   pushcli();
 
-  change_state_cas(myproc(),-RUNNABLE);
+  // change_state_cas(myproc(),-RUNNABLE);
+  if (!change_state_cas(myproc(), RUNNING, -RUNNABLE))
+    panic("yield: cas failed");
+  // cprintf("middle to yield with pid %d and state %d and cpu %d \n",myproc()->pid,myproc()->state,cpuid());
+
   sched();
   
   // needed????
@@ -553,27 +564,30 @@ sleep(void *chan, struct spinlock *lk)
   // guaranteed that we won't miss any wakeup
   // (wakeup runs with ptable.lock locked),
   // so it's okay to release lk.
-  if(lk != &ptable.lock){  //DOC: sleeplock0
-    release(lk);
-  }
+  pushcli();
+  // if(lk != &ptable.lock){  //DOC: sleeplock0
+  //   release(lk);
+  // }
+      release(lk);
 
   // Go to sleep.
+  if(!change_state_cas(p,RUNNING,-SLEEPING))
+    panic("sleep: cas failed");  // cprintf("slepppppp for pid %d and  \n",p->pid);
+// cprintf("slepppppp for pid %d and state %d \n",p->pid,p->state);
   p->chan = chan;
 
-  change_state_cas(p,-SLEEPING);
-  cprintf("slepppppp\n");
-  pushcli();
-
   sched();
-  popcli();
-  cprintf("returend slepppppp\n");
-
+  // cprintf("returend slepppppp pid %d and\n",p->pid);
   // Tidy up.
   p->chan = 0;
+  popcli();
+
   // Reacquire original lock.
-  if(lk != &ptable.lock){  //DOC: sleeplock2
-    acquire(lk);
-  }
+  // if(lk != &ptable.lock){  //DOC: sleeplock2
+  //   acquire(lk);
+  // }
+      acquire(lk);
+
 }
 
 
@@ -605,11 +619,22 @@ struct proc *p;
 static void
 wakeup1(void *chan)
 {
-struct proc *p;
+  struct proc *p;
+  pushcli();
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if((p->chan == chan) && (p->state == SLEEPING || p->state == -SLEEPING))
-      change_state_cas(p,-RUNNABLE);
+    if((p->chan == chan) && (p->state == SLEEPING || p->state == -SLEEPING)){
+      while (p->state == -SLEEPING) {
+        // busy-wait
+      }
+      if(change_state_cas(p, SLEEPING, -RUNNABLE)){
+        p->chan=0;
+        if(!change_state_cas(p, -RUNNABLE, RUNNABLE))
+          panic("wakeup1 failed");
+      }
+    }
+
   }   
+  popcli();
 }
 
 
@@ -617,7 +642,9 @@ struct proc *p;
 void
 wakeup(void *chan)
 {
+  pushcli();
   wakeup1(chan);
+  popcli();
 }
 
 // Kill the process with the given pid.
@@ -773,7 +800,7 @@ void handlesignals(void){
       p->killed = 1;
       // Wake process from sleep if necessary. 
      
-      change_state_cas(p,RUNNABLE);
+      change_state_cas(p,SLEEPING,RUNNABLE);
       continue;
     }
     p->sigmaskbackup = p->sigmask; 
