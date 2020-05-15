@@ -114,7 +114,7 @@ allocproc(void)
         break;
     if (p == &ptable.proc[NPROC]) {                               // if loop reached to the end and did not find an unused process.
       popcli();
-      cprintf("there is no process unused , cprint");
+     // cprintf("there is no process unused , cprint");
       return 0; 
     }
   } while (!(cas(&p->state, UNUSED, EMBRYO)));
@@ -402,7 +402,7 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  cprintf("first in scheduler \n");
+  //cprintf("first in scheduler \n");
   for(;;){
     // Enable interrupts on this processor.
     sti();
