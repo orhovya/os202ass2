@@ -106,7 +106,7 @@ allocproc(void)
 {
   struct proc *p;
   char *sp;
-  cprintf("Enterd allocproc \n");
+  // cprintf("Enterd allocproc \n");
   pushcli();
   do {
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
@@ -121,7 +121,7 @@ allocproc(void)
   popcli();
 
   p->pid = allocpid();
-  cprintf("after loop allocproc chosed pid is %d \n",p->pid);
+  // cprintf("after loop allocproc chosed pid is %d \n",p->pid);
 
   // Allocate kernel stack.
   if((p->kstack = kalloc()) == 0){
@@ -194,8 +194,7 @@ userinit(void)
   // this assignment to p->state lets other cores
   // run this process. 
   
-  p->state = RUNNABLE;
-
+  if(!change_state_cas(p, EMBRYO, RUNNABLE)){}
   // cprintf("end of userinit with pid %d and state %d \n",p->pid,p->state);
 
 }
@@ -278,7 +277,7 @@ fork(void)
   if(!change_state_cas(np,EMBRYO,RUNNABLE))
         panic("fork: cas failed");
  
-  cprintf("Fork function, created new process with id %d , Parent is %d\n",np->pid,curproc->pid);
+  // cprintf("Fork function, created new process with id %d , Parent is %d\n",np->pid,curproc->pid);
   return pid;
 }
 
@@ -311,7 +310,6 @@ exit(void)
   pushcli();
   if(!change_state_cas(curproc,RUNNING,-ZOMBIE))
     panic("exit cas did not work");
-  popcli();
   // Parent might be sleeping in wait().
   wakeup1(curproc->parent);
 
@@ -319,13 +317,13 @@ exit(void)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->parent == curproc){
       p->parent = initproc;
-      if(p->state == ZOMBIE  || p->state == -ZOMBIE)
+      if(p->state == ZOMBIE)
         wakeup1(initproc);
     }
   }
   // cprintf("in exit before sched\n");
   // Jump into the scheduler, never to return.
-  cprintf("b\n");
+  // cprintf("b\n");
   sched();
   panic("zombie exit");
 }
@@ -348,26 +346,25 @@ wait(void)
       panic("running -> neg_sleeping cas failed");
     }
 
-    curproc->chan= curproc;
+    curproc->chan= (void *)curproc;
 
     havekids = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->parent != curproc)
-        continue;
-      havekids = 1;
-      if(change_state_cas(p, ZOMBIE, UNUSED)){
-        // Found one.
-        pid = p->pid;
-        kfree(p->kstack);
-        p->kstack = 0;
-        freevm(p->pgdir);
+          if(p->parent != curproc)
+            continue;
+          havekids = 1;
+          if(p->state == ZOMBIE){
+            // Found one.
+            pid = p->pid;
+            kfree(p->kstack);
+            p->kstack = 0;
+            freevm(p->pgdir);
         p->pid = 0;
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
-
-        curproc->chan= 0;
-        change_state_cas(curproc,-SLEEPING, RUNNING);
+        change_state_cas(p,ZOMBIE, UNUSED);
+          change_state_cas(curproc,-SLEEPING, RUNNING);
 
         popcli();
 
@@ -415,7 +412,7 @@ scheduler(void)
 
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       // if(p->state != RUNNABLE) 
-      if(!change_state_cas(p,RUNNABLE, RUNNING))
+      if(!change_state_cas(p,RUNNABLE, -RUNNING))
         continue;
 
 
@@ -424,9 +421,11 @@ scheduler(void)
       // cprintf("in scheduler swtch pid %d and cpu is %d\n",p->pid,cpuid());
    
       switchuvm(p);
+      if(!change_state_cas(p,-RUNNING, RUNNING)){}
+
       // change_state_cas(p,RUNNING);
 
-      cprintf("after change state in schedler state of pid %d\n",p->pid,p->state);
+      // cprintf("after change state in schedler state of pid %d\n",p->pid,p->state);
 
 
       swtch(&(c->scheduler), p->context);
@@ -437,10 +436,10 @@ scheduler(void)
       // cprintf("returend from scheduler switchkvm and pid is %d and cpu is %d\n",p->pid,cpuid());
 
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;      
-      
+   
+      if (change_state_cas(p,-RUNNABLE,RUNNABLE)){
+        // cprintf("scheduler state changed to RUNNABLE for pid %d and state is %d and cpu is %d\n",p->pid,p->state,cpuid());
+      }
       if (change_state_cas(p,-SLEEPING,SLEEPING)){
         // cprintf("scheduler p->state == -SLEEPING for pid %d and state is %d and cpu is %d\n",p->pid,p->state,cpuid());
       if(p->killed){
@@ -449,9 +448,7 @@ scheduler(void)
        }
       }
 
-      if (change_state_cas(p,-RUNNABLE,RUNNABLE)){
-        // cprintf("scheduler state changed to RUNNABLE for pid %d and state is %d and cpu is %d\n",p->pid,p->state,cpuid());
-      }
+
         
 
       if (change_state_cas(p,-ZOMBIE,ZOMBIE)){
@@ -459,6 +456,9 @@ scheduler(void)
         wakeup1(p->parent);
         // cprintf("scheduler returend from wakeup1 \n");
       }
+            // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;   
     }
     popcli();
   }
@@ -568,25 +568,24 @@ sleep(void *chan, struct spinlock *lk)
   // if(lk != &ptable.lock){  //DOC: sleeplock0
   //   release(lk);
   // }
-      release(lk);
+  p->chan = chan;
 
   // Go to sleep.
   if(!change_state_cas(p,RUNNING,-SLEEPING))
     panic("sleep: cas failed");  // cprintf("slepppppp for pid %d and  \n",p->pid);
 // cprintf("slepppppp for pid %d and state %d \n",p->pid,p->state);
-  p->chan = chan;
-
+    release(lk);
   sched();
   // cprintf("returend slepppppp pid %d and\n",p->pid);
   // Tidy up.
-  p->chan = 0;
+       acquire(lk);
+
   popcli();
 
   // Reacquire original lock.
   // if(lk != &ptable.lock){  //DOC: sleeplock2
   //   acquire(lk);
   // }
-      acquire(lk);
 
 }
 
@@ -620,13 +619,13 @@ static void
 wakeup1(void *chan)
 {
   struct proc *p;
-  pushcli();
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if((p->chan == chan) && (p->state == SLEEPING || p->state == -SLEEPING)){
-      while (p->state == -SLEEPING) {
-        // busy-wait
+     while(!change_state_cas(p, SLEEPING, -RUNNABLE)){
+        if (p->state == RUNNING)
+          break;
       }
-      if(change_state_cas(p, SLEEPING, -RUNNABLE)){
+      if (p->state != RUNNING){   
         p->chan=0;
         if(!change_state_cas(p, -RUNNABLE, RUNNABLE))
           panic("wakeup1 failed");
@@ -634,7 +633,6 @@ wakeup1(void *chan)
     }
 
   }   
-  popcli();
 }
 
 
@@ -653,27 +651,23 @@ wakeup(void *chan)
 int
 kill(int pid, int signum)
 {
-  cprintf("entered kill func in proc.c with pid %d and signum %d\n",pid,signum);
+  // cprintf("entered kill func in proc.c with pid %d and signum %d\n",pid,signum);
   struct proc *p;
   if( (pid < 0) || (signum < 0) || (signum > (SIG_NUM-1)) ){
     return -1;
   }
-  int oldVal;
-  pushcli();
-  do {
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->pid == pid)
-        break;
-      }
-      if (p == &ptable.proc[NPROC]) {                               // if loop reached to the end 
-        popcli();
-        return -1; 
-      }
-      cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
-      oldVal =  p->pendingsig;
-  } while (!(cas(&p->pendingsig, oldVal , oldVal | (1 << signum))));
-  popcli();
-  return 0;
+  acquire(&ptable.lock);
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->pid != pid) {
+      continue;
+    }
+    // cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
+    p->pendingsig |= (1 << signum);
+    release(&ptable.lock);
+    return 0;
+  }
+  release(&ptable.lock);
+  return -1;
 }
 
 //PAGEBREAK: 36
@@ -729,35 +723,41 @@ sigaction(int sigNum, const struct sigaction *act, struct sigaction *oldact){
 void 
 sigret(void){
   struct proc *proc = myproc();
-  cprintf("In sigret func, process %d return\n",proc->pid);
+  // cprintf("In sigret func, process %d return\n",proc->pid);
   memmove(proc->tf, proc->trapframebackup, sizeof(struct trapframe));
   proc->tf->esp += sizeof (struct trapframe);
   proc->inusermode = 0;
+  // cprintf("In sigret handlers mask was %d", proc->sigmask);
   proc->sigmask = proc->sigmaskbackup;    
+  // cprintf("In sigret proc mask is %d", proc->sigmask);
 }
 
 
 void handlesignals(void){
+
   struct proc *p = myproc();
   struct sigaction* currAction;
   uint sizeofsigret;
+
   if (!p) {
     return;
   }
+
+  // handle Stop of process as a result of SIGSTOP - waits until SIGCONT and if ther is no SIGCONT yields
   if (p->stopped) {
-    cprintf("procss %d is stopped , will enter handel contsig.\n",p->pid);
+    // cprintf("procss %d is stopped , will enter handel contsig.\n",p->pid);
     stopped_loop:
-    cprintf("procss %d is stopped , entered loop.\n",p->pid);
+    // cprintf("procss %d is stopped , entered loop.\n",p->pid);
       while (1) {
         for (int i = 0; i < SIG_NUM; i++) {
           currAction = (struct sigaction*)(p->signalhandlers[i]);
           if (p->pendingsig & (1 << SIGCONT) || currAction->sa_handler == (void *) SIGCONT) {
-            cprintf("In handle cont sig func for process %d -  Got sig cont in pending signals. .\n",p->pid);
+            // cprintf("In handle cont sig func for process %d -  Got sig cont in pending signals. .\n",p->pid);
             pushcli();
             if (cas(&p->stopped, 1, 0)) {
-              cprintf("In handle cont sig func for process %d - stopped value is %d.\n",p->pid,p->stopped);
+              // cprintf("In handle cont sig func for process %d - stopped value is %d.\n",p->pid,p->stopped);
               p->pendingsig ^= (1 << SIGCONT);
-              cprintf("In handle cont sig func for process %d -  Handled cont sig and reverted to 0 in pending signals.\n",p->pid);
+              // cprintf("In handle cont sig func for process %d -  Handled cont sig and reverted to 0 in pending signals.\n",p->pid);
             }
             popcli();
             break;
@@ -770,13 +770,15 @@ void handlesignals(void){
         else
           yield();
       }
-    }
+  }
   // cprintf("In handlesignals, entering for Loop.\n");
   for (int i = 0; i < SIG_NUM; i++) {
     currAction = (struct sigaction*)(p->signalhandlers[i]);
 
-    if (((1 << i) & p->sigmask) & (i !=  SIGKILL) & (i != SIGSTOP) ){ // if handling this signal is not allowd by proc mask - continue.
-      cprintf("In handlesignals, the signal that is being handled is %d an it is in sigmask so skipped.\n",i);
+
+    // CHECK IF SIG IN SIGMASK
+    if ((((1 << i) & p->sigmask) >0 ) & (i !=  SIGKILL) & (i != SIGSTOP) ){ // if handling this signal is not allowd by proc mask - continue.
+      // cprintf("In handlesignals, the signal that is being handled is %d an it is in sigmask so skipped.\n",i);
       continue;
     }
 
@@ -784,35 +786,46 @@ void handlesignals(void){
       // cprintf("In handlesignals, the signal that is being handled is %d and it is not set in pending signals of proc.\n",i);
       continue;
     }
+
     p->pendingsig ^= (1 << i);                                          // xor which remove the signal from pending signals.
 
+    // SIGIGN
     if (currAction->sa_handler == (void *) SIG_IGN) {                     // if signal is sig ignore we will just continue to the next signal.
-      cprintf("In handlesignals, the signal that is being handled is %d and it is SIG_IGN so ignored.\n",i);
+      // cprintf("In handlesignals, the signal that is being handled is %d and it is SIG_IGN so ignored.\n",i);
       continue;
-    }
-    if (i == SIGSTOP || currAction->sa_handler == (void *) SIGSTOP) { 
-     p->stopped=1;
-     goto stopped_loop;
     }
 
+    // SIGSTOP
+    if (i == SIGSTOP || currAction->sa_handler == (void *) SIGSTOP) {     // if SigStop signal
+      p->stopped=1;                                                        // process will be stopped and jump into a loop until it gets SitgCont.
+      goto stopped_loop;
+    }
+
+    // SIGKILL OR SIGDFL
     if (currAction->sa_handler == (void *) SIG_DFL || currAction->sa_handler == (void *) SIGKILL) {                     // default signal is sigkill, so if givven we activate it straightforward.
-      cprintf("In handlesignals, the signal that is being handled is %d and it is SIGKILL, activate kill func with pid %d .\n",i,p->pid);
+      // cprintf("In handlesignals, the signal that is being handled is %d and it is SIGKILL, activate kill func with pid %d .\n",i,p->pid);
       p->killed = 1;
-      // Wake process from sleep if necessary. 
-     
-      change_state_cas(p,SLEEPING,RUNNABLE);
+        // Wake process from sleep if necessary.
+      if(p->state == SLEEPING)
+        p->state = RUNNABLE;  
       continue;
     }
-    p->sigmaskbackup = p->sigmask; 
-    p->sigmask = currAction->sigmask;
-    if(p->inusermode){
-      p->sigmask = p->sigmaskbackup;
-      continue;
+
+
+    p->sigmaskbackup = p->sigmask;                                      // backup signal mask of process before moving to mask of signal
+    p->sigmask = currAction->sigmask;                                   // set sigmask of signal as process sigmask.
+    
+
+
+    // USER SIGNAL HANDLERS
+    if(p->inusermode){                                                  // check if currently in usermode signal - to check nested signals.
+      p->sigmask = p->sigmaskbackup;                                    // if in the middle of user signal then do not run another signal
+      p->pendingsig ^= (1 << i);                                        // xor to add the signal to pending signals again as we didnt handled it. 
+      continue; 
     }
     else{
       p->inusermode = 1;
-
-      cprintf("In handlesignals, the signal that is being handled is %d and it is user signal\n",i);
+      // cprintf("In handlesignals, the signal that is being handled is %d and it is user signal\n",i);
       p->tf->esp -= sizeof(struct trapframe);                             // make space foe trapframe save.
       memmove((void *) (p->tf->esp), p->tf, sizeof(struct trapframe));    // move to esp of current trapframe the pointer to current trapframe.
       p->trapframebackup = (void *) (p->tf->esp);                         // save to backup trapframe the current trapframe
@@ -823,9 +836,9 @@ void handlesignals(void){
       p->tf->esp -= sizeofsigret;                                         // move esp to save space for sigret function call.
       memmove((void *) (p->tf->esp), sigretstart, sizeofsigret);          // move to esp the beginning of sigret func.
       *((int *) (p->tf->esp - 4)) = i;                                    // push to stack signum parameter
-      *((int *) (p->tf->esp - 8)) = p->tf->esp;                               // push to stack return address of sigret
+      *((int *) (p->tf->esp - 8)) = p->tf->esp;                           // push to stack return address of sigret
       p->tf->esp -= 8;                                                    // move esp to the beginning of params for handler func.
-      p->tf->eip = (uint)(currAction->sa_handler);                           // move eip to the handler's func in user space to run it.
+      p->tf->eip = (uint)(currAction->sa_handler);                         // move eip to the handler's func in user space to run it.
       break;
     }
   }

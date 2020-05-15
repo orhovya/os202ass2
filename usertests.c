@@ -1,4 +1,4 @@
-/*#include "param.h"
+#include "param.h"
 #include "types.h"
 #include "stat.h"
 #include "user.h"
@@ -7,6 +7,15 @@
 #include "syscall.h"
 #include "traps.h"
 #include "memlayout.h"
+
+
+#define SIG_DFL 0
+#define SIG_IGN 1
+#define SIGKILL 9
+#define SIGSTOP 17
+#define SIGCONT 19
+#define SIG_NUM 32
+
 
 char buf[8192];
 char name[3];
@@ -1743,132 +1752,244 @@ rand()
 {
   randstate = randstate * 1664525 + 1013904223;
   return randstate;
-}*/
-
-#include "types.h"
-#include "stat.h"
-#include "user.h"
-#define SIG_DFL 0
-#define SIG_IGN 1
-#define SIGKILL 9
-#define SIGSTOP 17
-#define SIGCONT 19
-#define SIG_NUM 32
+}
 
 
+// -------------------------userhandlers functions ------------------------------
 
 void infinite_loop_sig_handler(int signum){
     printf(1, "handler for signum: %d\n", signum);
-    kill(getpid(), 6);
+    kill(getpid(), 7);
 }
 
 void print_some_else(int signum){
     printf(1, "Executing handler for: %d\n", signum);
 }
 
-int
-main(int argc, char *argv[])
-{  
-  printf(1,"Tests starting \n");
- uint newmask =  (1<<10) | (1<<18), 
-  mask;
-  // int cpid;
+void sleep_user_fun(int signum){
+  printf(1,"before sleep and executing handler %d\n",signum);
+  sleep(200);
+  printf(1,"after sleep and executing handler %d\n",signum);
+}
+void long_user_fun(int signum){
+  sleep(300);
+  int count = 0;
+  for(int i=0;i<100000000;i++){
+    count +=1;
+  }
+  printf(1,"End of long user func - count is %d\n",count);
+}
+
+  // ------------------------ handlers struct-------------------------
   struct sigaction handler = {
       infinite_loop_sig_handler,
-      newmask
+      (1<<10) | (1<<18)
   };
   struct sigaction handler_print = {
     print_some_else,
-    newmask
+    (1<<10) | (1<<18)
   };
   struct sigaction old_handler;
 
-  //--------- 2.2 MASKS -------------
-  printf(1,"new mask is: 0x%p\n", newmask);
-  mask = sigprocmask(newmask);
-  printf(1,"mask before replacement: 0x%p\n", mask);
-  newmask = sigprocmask(newmask);
-  printf(1,"mask after replacement: 0x%p\n", newmask);
-
-  // -------- 2.1.4 registering signal handlers ---------
-  // (1) making sure the sig handler can not be changes after it was set
-  sigaction(6, &handler, 0); //handler for signum 6 is now handler
-  sigaction(6, &handler, &old_handler); //old_handler supposed to hold handler fields' values
-  handler.sa_handler = print_some_else; //change the handler from user space
-  sigaction(6, &handler, &old_handler); 
-  //if old_handler.sa is the same as print_some_else, then it was changed from the outside
-  printf(1, "old handler action: 0x%p expected addr: 0x%p\n", old_handler.sa_handler, infinite_loop_sig_handler);
-  sigaction(3,&handler_print, 0);
-  //------ 2.4 -----------
-  // (1) ignoring sigkill
-  kill(getpid(),3);
-  kill(getpid(),6);
-  // if(fork() == 0){
-  //   mask = sigprocmask(1<<9); // 1 in the 9th bit means ignoring the bit
-  //   kill(getpid(), 9);
-  //   printf(1, "ERROR: it ignores kill, test 2.4 (1)\n");
-  // }
-  
-  // (2) SIG_DFL kills the process
-  // if(fork() == 0){
-  //   kill(getpid(), 5);
-  //   printf(1, "ERROR: Default handler doesnt kill the process, test 2.4 (2)\n");
-  // } 
-
-  // // (3) SIGSTOP-SIGCONT test
-  // // sholud print: parent1, child, parent2
-  // if((cpid = fork()) == 0){
-  //   sleep(20);
-  //   printf(1,"Child\n");
-  //   exit();
-  // } else {
-  //   kill(cpid,SIGSTOP);
-  //   sleep(100);
-  //   printf(1,"Parent1\n");
-  //   kill(cpid, SIGCONT);
-  //   sleep(100);
-  //   printf(1,"Parent2\n");
-  // }
-  
-
-
-  // // (3) User level signal handler check
-  // if((cpid = fork()) == 0){
-  //   sleep(20);
-  //   printf(1,"Child in user level \n");
-  //   exit();
-  // } else {
-  //   kill(cpid,3);
-  //   sleep(100);
-  //   printf(1,"Parent in user level after signal 3 send.\n");
-  //   sleep(100);
-  //   kill(cpid, 9);
-  // }
-  // // // (4) SIG_IGN is really ignoring the function
-  // handler.sa_handler = (void*)1; //1=SIG_IGN
-  // sigaction(1, &handler, 0);
-  // kill(getpid(), 1);
-
-  // // (5) no NESTED user signal handlers
-  // handler.sa_handler = infinite_loop_sig_handler;
-  // sigaction(6, &handler, 0);
-  // kill(getpid(), 6);
-
-  // // (6) making sure the mask was set back to initial mask
-  // // if the forked process continues instead of exiting that means
-  // // that the flag for sig num 10 is 0 instead of 1
-  // if(fork() == 0){
-  //   kill(getpid(), 10);
-  //   exit();
-  // }
-  
-  // wait();
-  // wait();
-  // wait();
-  // wait();
-  exit();
+// -------------------------sanity functions ------------------------------
+void bin(unsigned n) 
+{ 
+    if (n > 1) 
+    bin(n>>1); 
+      
+    printf(1,"%d", n & 1); 
 }
-/*
+  // check sigaction function
+  void sanity1(){
+    sigaction(6, &handler, 0); //handler for signum 6 is now handler
+    sigaction(6, &handler, &old_handler); //old_handler supposed to hold handler fields' values
+    handler.sa_handler = print_some_else; //change the handler from user space
+    sigaction(6, &handler, &old_handler); 
+    //if old_handler.sa is the same as print_some_else, then it was changed from the outside
+    printf(1, "old handler action: 0x%p expected addr: 0x%p\n", old_handler.sa_handler, infinite_loop_sig_handler);
+    sigaction(3,&handler_print, 0);
+  }
+
+    // check sig proc mask function
+   void sanity2(){
+    uint newmask =  (1<<10) | (1<<18);
+    uint mask;
+    printf(1,"new mask is: 0x%p\n", newmask);
+    mask = sigprocmask(newmask);
+    printf(1,"mask before replacement: 0x%p\n", mask);
+    newmask = sigprocmask(newmask);
+    printf(1,"mask after replacement: 0x%p\n", newmask);
+  }
+
+  void sanity3(){
+    sigprocmask((1<<1)| (1<<2)|(1<<3));
+    kill(getpid(), 3);
+    printf(1,"Ignored signal which is in mask\n");
+  }
+
+  // check update of SIGKILL handler
+  void sanity4(){
+    uint newmask =  (1<<10) | (1<<18);
+    struct sigaction handler_sleep_func = {
+      sleep_user_fun,
+      newmask
+    };
+    int return_sigaction;
+    return_sigaction = sigaction(9,&handler_sleep_func,0);
+    if (return_sigaction!= -1)
+      printf(1,"Error in sanity2 func - update of SIGKILL handler enabled");
+  }
+
+  // check that sig proc mask has been updated
+  void sanity5(){
+    int procmask;
+    sigprocmask((1<<1)| (1<<2)|(1<<3));
+    procmask = sigprocmask((1<<1)| (1<<2)|(1<<3));
+    if (procmask != ((1<<1)| (1<<2)|(1<<3)))
+        printf(1,"Error in sanity4- mask was not updated correctly.\n");
+  }
+
+
+  // check if ignores
+  void sanity6(){
+    handler.sa_handler = (void*)1; 
+    sigaction(1, &handler, 0);
+    kill(getpid(), 1);
+  }
+
+  // check that SIGKILL is not being ignored.
+  void sanity7(){
+    if(fork()==0){
+      sigprocmask(1<<9); 
+      kill(getpid(), 9);
+      printf(1, "Error is sanity7: it ignores SIGKILL signal\n");
+    }
+  }
+
+  // check no nested signals
+  void sanity8(){
+    handler.sa_handler = infinite_loop_sig_handler;
+    sigaction(7, &handler, 0);
+    handler.sa_handler = print_some_else;
+    sigaction(29, &handler, 0);
+    kill(getpid(), 7);
+    kill(getpid(), 29);
+    printf(1,"end of sanity8");
+  }
+
+  // check that default handler kills the process
+  void sanity9(){
+    if(fork() == 0){
+      kill(getpid(), 5);
+      printf(1,"kill pid %d",getpid());
+      printf(1, "Error in sanity9: Default handler does not kill the process\n");
+    }
+  }
+
+
+  // check that SIGKILL is handled while sleeping.
+  void sanity10(){
+    uint newmask =  (1<<10) | (1<<18);
+    int cpid;
+    struct sigaction handler_sleep_func = {
+      sleep_user_fun,
+      newmask
+    };
+    sigaction(3,&handler_sleep_func, 0);
+    if((cpid = fork()) == 0){
+        sleep(20);
+        printf(1,"Error in sanity10- Child should not print this.\n");
+      } else {
+        kill(cpid,3);
+        sleep(20);
+        kill(cpid,9);
+        printf(1,"Parent after Sending SIGKILL to child while sleeping\n");
+      }
+  }
+
+  // check that while handling a signal do not get signals that are in the mask. when returning back running the pending signals with correct mask.
+  void sanity11(){
+    uint newmask_forlongfunc =  (1<<11) | (1<<18);
+    uint newmask =  (1<<13) | (1<<18);
+    printf(1,"In tests mask of reguler handler is %d \n",newmask);
+    printf(1,"In tests mask of long handler is %d \n",newmask_forlongfunc);
+    int cpid;
+    struct sigaction handler_long_func = {
+      long_user_fun,
+      newmask_forlongfunc
+    };
+    struct sigaction handler_print = {
+    print_some_else,
+    newmask
+    };
+
+    sigaction(3,&handler_long_func, 0);
+    sigaction(11,&handler_print, 0);
+
+    if((cpid = fork()) == 0){
+        sleep(100);
+        printf(1,"Child returned from sleep.\n");
+      } else {
+        kill(cpid,3);
+        kill(cpid,11);
+        sleep(200);
+        printf(1,"Parent after Sending SIG 11 for the first time to child\n");
+        sleep(100);
+        kill(cpid,11);
+        printf(1,"Parent after Sending SIG 11 for the second time to child\n");
+        kill(cpid,9);
+      }
+  }
+  // check SIGSTOP and SIGCONT
+  void sanity12(){
+    int cpid;
+    if((cpid = fork()) == 0){
+      sleep(20);
+      printf(1,"Child\n");
+      sleep(1000);
+
+    } else {
+      kill(cpid,SIGSTOP);
+      sleep(100);
+      printf(1,"Parent1\n");
+      kill(cpid, SIGCONT);
+      sleep(100);
+      printf(1,"Parent2\n");
+      kill(cpid,9);
+    }
+  }
+
+
+  // check user level handler works correctly
+  void sanity13(){
+    sigaction(30, &handler_print, 0); //handler for signum 6 is now handler
+    int cpid;
+    if((cpid = fork()) == 0){
+      sleep(20);
+      printf(1,"Child in user level \n");
+    } else {
+      kill(cpid,30);
+      sleep(100);
+      printf(1,"Parent in user level after signal 30 send.\n");
+      sleep(100);
+      kill(cpid, 9);
+    }
+  }
+
+  // check sig proc mask
+  void sanity14(){
+    uint maskfortest;
+    maskfortest = sigprocmask((1<<1)| (1<<2)|(1<<3)); // 1 in the 9th bit means ignoring the bit
+    bin(maskfortest);
+    printf(1,"\n");
+    maskfortest = 0;
+    maskfortest = sigprocmask((1<<1)| (1<<2)|(1<<3)); // 1 in the 9th bit means ignoring the bit
+    bin(maskfortest);
+    printf(1,"\n");
+    kill(getpid(), 3);
+  
+  }
+
 int
 main(int argc, char *argv[])
 {
@@ -1879,6 +2000,31 @@ main(int argc, char *argv[])
     exit();
   }
   close(open("usertests.ran", O_CREATE));
+
+  sanity1();
+  sanity2();
+  sanity3();
+  sanity4();
+  sanity5();
+  sanity6();
+
+  sanity7();
+  // sanity8();     // need to understand what should be done for this test.
+  sanity9();
+  sanity10();
+  sanity11();
+  sanity12();
+  sanity13();
+  sanity14();
+
+
+  wait();
+  wait();
+  wait();
+  wait();
+  wait();
+  wait();
+  printf(1,"Done with signal tests - ok\n");
 
   argptest();
   createdelete();
@@ -1925,4 +2071,3 @@ main(int argc, char *argv[])
 
   exit();
 }
-*/
