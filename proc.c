@@ -651,23 +651,26 @@ wakeup(void *chan)
 int
 kill(int pid, int signum)
 {
-  // cprintf("entered kill func in proc.c with pid %d and signum %d\n",pid,signum);
-  struct proc *p;
+struct proc *p;
   if( (pid < 0) || (signum < 0) || (signum > (SIG_NUM-1)) ){
     return -1;
   }
-  acquire(&ptable.lock);
-  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-    if (p->pid != pid) {
-      continue;
-    }
-    // cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
-    p->pendingsig |= (1 << signum);
-    release(&ptable.lock);
-    return 0;
-  }
-  release(&ptable.lock);
-  return -1;
+  int oldVal;
+  pushcli();
+  do {
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+      if(p->pid == pid)
+        break;
+      }
+      if (p == &ptable.proc[NPROC]) {                               // if loop reached to the end 
+        popcli();
+        return -1; 
+      }
+      //cprintf("In kill func, non default signal in kill func for pid %d and signum is %d\n",p->pid,signum);
+      oldVal =  p->pendingsig;
+  } while (!(cas(&p->pendingsig, oldVal , oldVal | (1 << signum))));
+  popcli();
+  return 0;
 }
 
 //PAGEBREAK: 36
